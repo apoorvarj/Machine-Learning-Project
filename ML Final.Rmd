@@ -1,0 +1,484 @@
+---
+title: "Project Version 2"
+author: "Apoorva Joshi"
+date: "April 26, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#Loading the  data
+loan <- read.csv("C:\\My Personal\\CMU\\Class\\Sem 2\\MLPS\\project\\Lending Club Loan\\loan.csv")
+```
+
+```{r}
+#Handling missing values, accuracies etc
+options(scipen=1000) 
+library(forcats)
+library("desc")
+#Exploring the structure of the data
+str(loan)
+#Checking the number of missing values in each column
+sapply(loan, function(x) sum(is.na(x)))
+#Subsetting the loan dataframe by removing columns with more than 90% NA values
+loan <- subset( loan, select = -c( inq_fi : inq_last_12m))
+loan <- subset( loan, select = -c( open_acc_6m : all_util))
+loan <- subset( loan, select = -c( dti_joint,mths_since_last_major_derog, annual_inc_joint,mths_since_last_record,mths_since_last_delinq))
+#Removing unecessary columns 
+loan <- subset( loan, select = -c( id,member_id, url,title,desc))
+#Filling in the number of missing values in annual_income by the mean
+#Small values like 4,29
+loan$annual_inc[is.na(loan$annual_inc)] <- mean(loan$annual_inc,na.rm=T)
+loan$delinq_2yrs[is.na(loan$delinq_2yrs)] <- mean(loan$delinq_2yrs,na.rm=T)
+loan$inq_last_6mths[is.na(loan$inq_last_6mths)] <- mean(loan$inq_last_6mths,na.rm=T)
+loan$pub_rec[is.na(loan$pub_rec)] <- mean(loan$pub_rec,na.rm=T)
+loan$open_acc[is.na(loan$open_acc)] <- mean(loan$open_acc,na.rm=T)
+loan$acc_now_delinq[is.na(loan$acc_now_delinq)] <- mean(loan$acc_now_delinq,na.rm=T)
+#Combining the labels of the loan_status to form 3 levels from 10
+unique(loan$loan_status)
+loan.trim <- loan
+loan.trim$loan_status <- loan.trim$loan_status %>% fct_collapse(Bad = c("Charged Off", "Default","In Grace Period","Late (16-30 days)","Late (31-120 days)","In Grace Period","Does not meet the credit policy. Status:Charged Off"))
+loan.trim$loan_status <- loan.trim$loan_status %>% fct_collapse(Good =  c( "Does not meet the credit policy. Status:Fully Paid", "Fully Paid"))
+loan.trim$loan_status <- loan.trim$loan_status %>% fct_collapse(Current =  c( "Current", "Issued"))
+#Finding the nymber of loans with status Current
+sum(loan.trim$loan_status == "Current")
+#606404
+#Finding the nymber of loans with status Current
+sum(loan.trim$loan_status == "Good")
+#153937
+#Finding the nymber of loans with status Current
+sum(loan.trim$loan_status == "Bad")
+#56381
+#Forming a new dataframe consisting of only Good and Bad
+loan.trim1<- loan.trim
+loan.good.bad<-loan.trim1[loan.trim1$loan_status=="Good" | loan.trim1$loan_status=="Bad",]
+loan.good.bad$loan_status <- loan.good.bad$loan_status[ , drop=TRUE]
+levels(loan.good.bad$loan_status)
+#Chekcing the data quality
+sapply(loan.good.bad,function(x) sum(is.na(x)))
+#Checking the unique values 
+sapply(loan.good.bad, function(x) length(unique(x)))
+#Removing the number of rows that had NA's and were minimal in number
+loan.good.bad <- na.omit(loan.good.bad)
+#Rechecking the presence of NAs in the dataset
+sapply(loan.good.bad, function(x) sum(is.na(x)))
+```
+
+
+```{r}
+#Minor Data Exploration
+library(DescTools)
+library(ggplot2)
+#Describing the loan status distribution
+Desc(loan.trim$loan_status, main = "Loan Status distribution", plotit = 1)
+#Describing the grade distribution
+Desc(loan.trim$grade, main = "Grade distribution", plotit = 1)
+#Describing the loan_amnt distribution
+Desc(loan.trim$loan_amnt, main = "Loan amount distribution", plotit = TRUE)
+#Describing the purpose distribution
+Desc(loan.trim$purpose, main = "Loan purposes", plotit = TRUE)
+#Describing the home ownership distribution
+Desc(loan.trim$home_ownership, main = "Home Ownership", plotit = TRUE)
+#Decribing the loan amount and loan status relationship
+ggplot(loan.trim, aes(loan_amnt, fill = loan_status)) + geom_bar()
+```
+
+```{r}
+#Balancing the data. Showing the unbalanced good and bad statuses
+#Describing the loan status distribution
+Desc(loan.good.bad$loan_status, main = "Loan Status distribution", plotit = 1)
+#Finding out the number of records that had the value good
+num.good<- length(which(loan.good.bad$loan_status == 'Good'))
+num.good
+#Finding out the number of records that had the value bad
+num.bad<- length(which(loan.good.bad$loan_status == 'Bad'))
+num.bad
+#Subsetting the rows with loan status as good
+good <- subset(loan.good.bad, loan_status == 'Good')
+#Subsetting the rows with loan status as bad
+bad <- subset(loan.good.bad, loan_status == 'Bad')
+#Undersampling the majority class which is good
+undersample <- good[sample(nrow(good), num.bad),]
+#Combining it with the rows that have value as bad
+balanced.loan <- rbind(bad, undersample)
+#Checking the distribution again
+Desc(balanced.loan$loan_status, main = "Loan Status distribution", plotit = 1)
+
+```
+
+
+```{r}
+#Feature subselection using information gain
+library(logistf)
+library("FSelector", quietly = TRUE)
+library(mlr)
+#Forming a task that will filter the values 
+info.gain<-information.gain(loan_status ~ . , balanced.loan)
+loan.class.task = makeClassifTask(id = "loan", data = balanced.loan,target = "loan_status")
+loan.class.task
+#checking the chi-sqaured along with information gain
+fv2 = generateFilterValuesData(loan.class.task, method = c("information.gain", "chi.squared"))
+fv2.dataframe <- fv2$data
+fv2.dataframe <- fv2.dataframe[order(-fv2.dataframe$information.gain),]
+#Providing the threshold
+## Keep all features with importance greater than 0.5
+filtered.task = filterFeatures(loan.class.task, method = "information.gain", abs = 10)
+#Filtering the variables to be selected
+fv1 = generateFilterValuesData(filtered.task, method = "information.gain")
+#Forming a dataframe
+fv1.dataframe <- fv1$data
+#Ordering it in a descending order
+fv1.dataframe <- fv1.dataframe[order(-fv1.dataframe$information.gain),]
+#Potting the values
+plotFilterValues(fv1)
+#Separating the features to be subsetted
+features<- fv1.dataframe$name
+#Subsetting balanced loan by features
+loan_status<-balanced.loan[,c("loan_status")]
+#Combining it with the loan_status
+loan_status <- as.data.frame(loan_status)
+balanced.loan <- subset( balanced.loan, select = features)
+balanced.loan <- cbind(balanced.loan,loan_status)
+
+```
+
+
+```{r}
+#Scaling for SVM
+#Normalizing th efeatures before svm
+#emp_rtitle has 299273 factor levels. Cannot convert into dummy form normalizing. 
+#Hence ignoring them 
+balanced.loan.subset <-subset( balanced.loan, select = -c( next_pymnt_d,emp_title,loan_status))
+#Converting into a matrix
+balanced.loan.subset.matrix <- data.matrix(balanced.loan.subset)
+#Scaling the numeric features
+balanced.scaled.svm <- as.data.frame(scale(balanced.loan.subset.matrix))
+#Creating a dataframe of loan_status
+loan_status.frame<-subset( balanced.loan, select = c(loan_status))
+loan_status.frame <-as.data.frame(loan_status.frame)
+#Binding it with scales numeric values
+balanced.scaled.svm.final <- cbind(balanced.scaled.svm ,loan_status.frame)
+#Splitting the data into test,train 
+set.seed(123)
+#Defining the size
+size <- floor(0.50 * nrow(balanced.scaled.svm.final))
+train_ind <- sample(seq_len(nrow(balanced.scaled.svm.final)), size = size)
+train <- balanced.scaled.svm.final[train_ind, ]
+test <-balanced.scaled.svm.final[-train_ind, ]
+nrow(train)
+nrow(test)
+
+#norm_fun <- function(x){(x-min(x))/(max(x)-min(x))}
+
+```
+
+
+
+
+```{r}
+library(e1071)
+#Linear Kernel
+linear.svm <- svm(loan_status ~., data=train, kernel='linear', cost=10, scale=FALSE)
+#Predicting the outcome on the test set
+linear.preds <- predict(linear.svm, test)
+#Forming a confusion matrix
+linear.tab <- table(pred = linear.preds, true = test$loan_status)
+#Deriving performance metrics
+linear.accuracy <- (linear.tab[1,1] + linear.tab[2,2])/(linear.tab[2,1] + linear.tab[2,2] +linear.tab[1,2] + linear.tab[1,1])
+linear.accuracy
+linear.sensitivity <- (linear.tab[1,1])/(linear.tab[1,1] + linear.tab[2,1])
+linear.sensitivity 
+linear.specificity <- (linear.tab[2,2])/(linear.tab[2,2] +linear.tab[1,2] )
+linear.specificity
+#Tuning the linear svm to find best cost 
+#Hyperparameter grid search for cost
+linear.svm.tume <- tune.svm(loan_status ~., data=train, cost = 2^(-4:4)) 
+print(linear.svm.tume)
+summary(linear.svm.tume)
+linear.svm1 <- svm(loan_status ~., data=train, kernel='linear', cost=4, scale=FALSE)
+#Predicting the outcome on the test set
+linear.preds1 <- predict(linear.svm1, test)
+#Forming a confusion matrix
+linear.tab1 <- table(pred = linear.preds1, true = test$loan_status)
+#Deriving performance metrics
+linear.accuracy1 <- (linear.tab1[1,1] + linear.tab1[2,2])/(linear.tab1[2,1] + linear.tab1[2,2] +linear.tab1[1,2] + linear.tab1[1,1])
+linear.accuracy1
+linear.sensitivity1 <- (linear.tab1[1,1])/(linear.tab1[1,1] + linear.tab1[2,1])
+linear.sensitivity1 
+linear.specificity1 <- (linear.tab1[2,2])/(linear.tab1[2,2] +linear.tab1[1,2] )
+linear.specificity1
+
+library(pROC)
+#Changing good and bad to 0 and 1
+linear.preds1.roc <- as.data.frame(linear.preds1)
+linear.preds1.roc$linear.preds1 <-ifelse(linear.preds1.roc$linear.preds1 == 'Good', 0, 1)
+linear1.roc <- roc(test$loan_status, linear.preds1.roc$linear.preds1)
+plot(linear1.roc, col="blue", main="ROC Plot on the test Dataset")
+print(linear1.roc)
+
+#Tuning the polynomial svm to get best parameters
+#Hyperparameter grid search for cost
+poly.svm.tune <- tune.svm(loan_status ~., data=train, cost = 2^(-5:5),degree = c(2,3,4))
+print(poly.svm.tune)
+
+#Polynomial SVM
+poly.svm <- svm(loan_status ~., data=train, kernel='polynomial', degree=2, scale=FALSE)
+poly.preds <- predict(poly.svm, test)
+#Forming a confusion matrix
+poly.tab <- table(pred = poly.preds, true = test$loan_status)
+#Deriving performance metrics
+poly.accuracy <- (poly.tab[1,1] + poly.tab[2,2])/(poly.tab[2,1] + poly.tab[2,2] + poly.tab[1,2] + poly.tab[1,1])
+poly.accuracy
+poly.sensitivity <- (poly.tab[1,1])/(poly.tab[1,1] + poly.tab[2,1])
+poly.sensitivity 
+poly.specificity <- (poly.tab[2,2])/(poly.tab[2,2] + poly.tab[1,2] )
+poly.specificity
+
+
+library(pROC)
+#Changing good and bad to 0 and 1
+poly.preds.roc <- as.data.frame(poly.preds)
+poly.preds.roc$poly.preds <-ifelse(poly.preds.roc$poly.preds== 'Good', 0, 1)
+poly.roc <- roc(test$loan_status, poly.preds.roc$poly.preds)
+plot(poly.roc, col="blue", main="ROC Plot on the test Dataset")
+print(poly.roc)
+
+#Tuning the radial svm to get best parameters
+#Hyperparameter grid search for cost and gamma
+radial.svm.tune <- tune.svm(loan_status ~., data=train, cost = 2^(-5:5),gamma=2^(-5:5))
+print(radial.svm.tune)
+
+
+#radial SVM
+radial.svm <- svm(loan_status ~., data=train, kernel='radial', cost= 2, gamma=0.5, scale=FALSE)
+radial.preds <- predict(radial.svm, test)
+
+#Forming a confusion matrix
+radial.tab <- table(pred = radial.preds, true = test$loan_status)
+#Deriving performance metrics
+radial.accuracy <- (radial.tab[1,1] + radial.tab[2,2])/(radial.tab[2,1] + radial.tab[2,2] + radial.tab[1,2] + radial.tab[1,1])
+radial.accuracy
+radial.sensitivity <- (radial.tab[1,1])/(radial.tab[1,1] + radial.tab[2,1])
+radial.sensitivity 
+radial.specificity <- (radial.tab[2,2])/(radial.tab[2,2] + radial.tab[1,2] )
+radial.specificity
+#Changing good and bad to 0 and 1
+radial.preds.roc <- as.data.frame(radial.preds)
+radial.preds.roc$radial.preds <-ifelse(radial.preds.roc$radial.preds == 'Good', 0, 1)
+radial.roc <- roc(test$loan_status, radial.preds.roc$radial.preds)
+plot(radial.roc, col="blue", main="ROC Plot on the test Dataset")
+print(radial.roc)
+
+```
+
+
+ 
+```{r}
+#Function for cross-validation
+fit_cv_svm_radial <- function(df, nfolds, parameter_list, svm_formula, outcome_name) 
+  { 
+
+  randomization <- sample(nfolds, nrow(df), r = T)
+  parameter_grid <- expand.grid(parameter_list)
+  
+  for (fold in 1:nfolds) {
+    if (fold %% 3 == 0) print(paste("Fold #", fold)) 
+    train <- df[randomization != fold, ] 
+    val <- df[randomization == fold, ]
+    
+    parameter_grid[[paste0("fold", fold)]] <- 1
+    
+    for (row in 1:nrow(parameter_grid))
+      { if (row %% 50 == 0) { print(paste("Parameter Grid #", row)) } 
+      model <- svm(as.formula(svm_formula), data = train, kernel = 'radial', type = "C-classification", cost = parameter_grid$cost[row], gamma =          parameter_grid$gamma[row])
+      model_pred <- predict(model, newdata = val)
+      parameter_grid[[paste0("fold", fold)]][row] <mean(val[[outcome_name]] == model_pred)
+}
+  }
+  
+  long_parameter_grid <- parameter_grid %>% gather(fold_num, acc, -cost, -gamma)
+   ranked_parameters <- long_parameter_grid %>% group_by(cost, gamma) %>% summarise(mean_acc = mean(acc)) %>% arrange(desc(mean_acc))
+
+   final_model <- svm(as.formula(svm_formula), data = df, kernel = 'radial', type = "C-classification",
+                      cost = ranked_parameters$cost[1], gamma = ranked_parameters$gamma[1]) 
+   list(final_model = final_model, chosen_cost = ranked_parameters$cost[1], chosen_gamma = ranked_parameters$gamma[1], long_parameter_grid =    long_parameter_grid)
+}
+
+```
+
+
+```{r}
+outer_cv_svm <- function(df, outer_nfolds, inner_nfolds, parameter_list, svm_formula, outcome_name) { 
+randomization <- sample(outer_nfolds, nrow(df), r = T)
+results_df <- data.frame(fold = seq(outer_nfolds), chosen_cost = 0, chosen_gamma = 0, acc = 0) 
+
+for (fold in 1:outer_nfolds) 
+  { train_val <- df[randomization != fold, ]
+  test <- df[randomization == fold, ]
+cv_svm_list <- fit_cv_svm_radial(train_val, inner_nfolds, parameter_list, svm_formula, outcome_name)
+svm_preds <- predict(cv_svm_list$final_model, newdata = test)
+
+  results_df$acc[fold] < - mean(svm_preds == test[[outcome_name]])
+  results_df$chosen_cost[fold] <- cv_svm_list$chosen_cost
+  results_df$chosen_gamma[fold] <- cv_svm_list$chosen_gamma
+} 
+list(results = results_df)
+} 
+
+
+parameter_list = list(cost = 10^seq(-2, 1.5, 0.5), gamma = 10^seq(-3, 1.5, 0.5)) 
+svm_formula = "loan_status ~ ."
+
+set.seed(739) 
+
+nested_results <-  outer_cv_svm(train, 3, 5, parameter_list, svm_formula, "loan_status")
+
+vector_confint <- function(num_vec) {
+avg_val = mean(num_vec)
+sd_vec = sd(num_vec)
+sqrt_n = sqrt(length(num_vec))
+lower = avg_val - 2*sd_vec/sqrt_n
+upper = avg_val + 2*sd_vec/sqrt_n
+c(lower, upper)
+}
+print(nested_results$results)
+
+
+```
+
+
+
+
+```{r}
+library("aod")
+library("pls")
+library("klaR")
+library(stepPlr)
+#All attempts made for logistic regression. Some did not converge
+#Attempt1
+logm1 <- glm(loan_status ~ total_rec_prncp +last_pymnt_amnt+total_pymnt_inv , data =train, family = "binomial")
+#Attempt 2
+log.reg.1 <- train(loan_status ~ total_rec_prncp +last_pymnt_amnt,  data=train, method="glm", family="binomial")
+summary(logm1)
+confint.default(logm1)
+exp(coef(logm1))
+exp(cbind(OR = coef(logm1), confint.default(logm1)))
+#Fitting a logistic regression using cross-validation
+ctrl <- trainControl(method = "repeatedcv", repeats = 3, classProbs = TRUE, summaryFunction = twoClassSummary)
+plsFit <- caret ::train(loan_status ~ total_rec_prncp +last_pymnt_amnt+ +total_pymnt +total_pymnt_inv + collection_recovery_fee + recoveries + out_prncp_inv + out_prncp, data = train, method = "pls", tuneLength = 15, trControl = ctrl, metric = "ROC", preProc = c("center", "scale"))
+#Extracting the classes
+plsClasses <- predict(plsFit, newdata = test)
+#Getting the probabilities
+plrProbs <- predict(plr.fit, newdata = test, type = "prob")
+head(plrProbs)
+#Forming the confusion matrix
+confusionMatrix(data = plrClasses, test$loan_status)
+set.seed(1492)
+#Plotting the fit
+plot(plsFit)
+#Forming the classes
+plsClasses <- predict(plsFit, newdata = test)
+#Getting the probabilities
+plsProbs <- predict(plsFit, newdata = test, type = "prob")
+head(plsProbs)
+#Confusion matrix
+confusionMatrix(data = plsClasses, test$loan_status)
+set.seed(123)
+#Trying RDA
+rdaGrid = data.frame(gamma = (0:4)/4, lambda = 3/4)
+rdaFit <- caret::train(loan_status ~ total_rec_prncp +last_pymnt_amnt+ +total_pymnt +total_pymnt_inv + collection_recovery_fee + recoveries + out_prncp_inv + out_prncp, data = train, method = "rda", tuneGrid = rdaGrid, trControl = ctrl, metric = "ROC")
+rdaClasses <- predict(rdaFit, newdata = test)
+confusionMatrix(rdaClasses, test$loan_status)
+selectedIndices <- plsFit$pred$mtry == 2
+# Plot:
+plot.roc(rdaFit$pred$obs[selectedIndices],
+         rfFit$pred$M[selectedIndices])
+``` 
+
+
+
+```{r} 
+
+#SVM attempts using different packages
+#Trying to use that package that took the minimum time
+library(caret)
+library(dplyr)         
+library(kernlab)       
+library(pROC)
+
+
+
+ctrl.svm <- trainControl(method="repeatedcv",   # 10fold cross validation
+                     repeats=5,		    # do 5 repititions of cv
+                     summaryFunction=twoClassSummary,	# Use AUC to pick the best model
+                     classProbs=TRUE)
+ 
+
+#Normalizing th efeatures before svm
+#emp_rtitle has 299273 factor levels. Cannot convert into dummy form normalizing. 
+#Hence ignoring them 
+svm.subset <-subset( train, select = -c( next_pymnt_d,emp_title,loan_status))
+#Converting into a matrix
+svm.subset.matrix <- data.matrix(svm.subset)
+#Scaling the numeric features
+scaled.svm <- as.data.frame(scale(svm.subset.matrix))
+#Creating a dataframe of loan_status
+loan_status<-train[,c("loan_status")]
+loan_status <- as.data.frame(loan_status)
+#Binding it with scales numeric values
+svm.final <- cbind(scaled.svm,loan_status)
+#Set seed to the same value to compare the performance of these two kernels
+set.seed(1492)
+#Hyperparameter search for optimum value of c
+linear.grid <- expand.grid(C = c(0.75, 0.9, 1, 1.1, 1.25))
+#Running Linear svm
+svmFit <- train(loan_status ~ . , data = svm.final, method = "svmLinear",  trControl = ctrl.svm, preProc = c("center", "scale"),tuneGrid = linear.grid, metric = "ROC")
+#Hyperparameter search for values of c and sigma 
+radial.grid <- expand.grid(sigma = c(.01, .015, 0.2), C = c(0.75, 0.9, 1, 1.1, 1.25))
+#Running radial svm 
+svmFit.radial <- caret::train(loan_status ~ . , data = svm.final, method = "svmRadial",  trControl = ctrl.svm, preProc = c("center", "scale"), 
+                       tuneLength = 3, tuneGrid = radial.grid, metric = "ROC")
+
+svmFit.radial <- caret::train(x=scaled.svm, y=loan_status$loan_status, data = svm.final, method = "svmRadial",  trControl = ctrl.svm, 
+                              classProbs = TRUE, preProc = c("center", "scale"), tuneGrid = radial.grid, metric = "ROC")
+#Running Linear svm
+svmFit <- train(loan_status ~ . , data = svm.final, method = "svmPoly",  trControl = ctrl.svm, preProc = c("center", "scale"),metric = "ROC")
+
+
+svmFit.poly <- train(trainX, trainY, 
+                             method = "svmPoly", 
+                             trControl = cctrl1,
+                             preProc = c("center", "scale"))
+
+
+#Comparing the performance of the methods
+svm.compare <- resamples(list(Linear.SVM =svmFit,Radial.SVM = svmFit.radial))
+svm.compare$values
+
+bwplot(svm.compare,metric="ROC",ylab =c("linear kernel", "radial kernel"))
+
+trellis.par.set(theme1)
+bwplot(svm.compare, layout = c(3, 1))
+
+trellis.par.set(caretTheme())
+dotplot(svm.compare, metric = "ROC")
+
+splom(resamps)
+
+difValues <- diff(resamps)
+difValues
+
+summary(difValues)
+
+trellis.par.set(theme1)
+bwplot(difValues, layout = c(3, 1))
+
+
+
+```
+
+
